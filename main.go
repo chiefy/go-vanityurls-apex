@@ -1,18 +1,27 @@
 package main
 
 import (
-	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/chiefy/go-vanityurls-apex/handler"
 )
 
 func main() {
+	configPath := "vanity.yaml"
 	addr := ":" + os.Getenv("PORT")
-	http.HandleFunc("/", hello)
-	log.Fatal(http.ListenAndServe(addr, nil))
-}
-
-func hello(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "Hello World from Go")
+	vanity, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	h, err := handler.NewHandler(vanity)
+	if err != nil {
+		log.Fatal(err)
+	}
+	http.Handle("/", h)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatal(err)
+	}
 }

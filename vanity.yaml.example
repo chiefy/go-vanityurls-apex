@@ -1,0 +1,8 @@
+host: go.go.gadget
+
+paths:
+  /helicopter:
+    repo: https://github.com/igadget/helicopter
+
+  /nose:
+    repo: https://github.com/igadget/nose
