@@ -10,7 +10,7 @@ This is a hard fork of [GoogleCloudPlatform/govanityurls](https://github.com/Goo
 ## Installation
 
 ```
-go get -u github.com/chiefy/go-vanityurls-apex
+go get -u go.bourbon.stream/go-vanityurls-apex
 ```
 
 ## Getting Started
