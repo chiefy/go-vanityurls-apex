@@ -7,16 +7,13 @@ import (
 	"os"
 
 	"go.bourbon.stream/go-vanityurls-apex/handler"
+	yaml "gopkg.in/yaml.v2"
 )
 
 func main() {
-	configPath := "vanity.yaml"
 	addr := ":" + os.Getenv("PORT")
-	vanity, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	h, err := handler.NewHandler(vanity)
+
+	h, err := handler.NewHandler(fileFetcher{path: "vanity.yaml"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -24,4 +21,23 @@ func main() {
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type fileFetcher struct {
+	path string
+}
+
+func (ff fileFetcher) Fetch() (*handler.Config, error) {
+	var config *handler.Config
+
+	vanity, err := ioutil.ReadFile(ff.path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := yaml.Unmarshal(vanity, &config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
 }
