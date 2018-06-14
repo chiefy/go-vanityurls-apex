@@ -21,14 +21,37 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v2"
+	"sync"
+	"time"
 )
 
-type handler struct {
+// ConfigFetcher defines an interface in which to fetch a configuration file to be used when setting up the handler. Fetch() is called immediately
+// and then spawns a background goroutine that loops forever, but sleeps for the given fetch_interval defined in the config. If no fetch_interval
+// is set then it defaults to 24 hours.
+type ConfigFetcher interface {
+	Fetch() (*Config, error)
+}
+
+// Config is the data needed to set up the Handler
+type Config struct {
+	Host          string `yaml:"host,omitempty"`
+	FetchInterval *int   `yaml:"fetch_interval,omitempty"`
+	CacheAge      *int   `yaml:"cache_max_age,omitempty"`
+	Paths         map[string]struct {
+		Repo    string `yaml:"repo,omitempty"`
+		Display string `yaml:"display,omitempty"`
+		VCS     string `yaml:"vcs,omitempty"`
+	} `yaml:"paths,omitempty"`
+}
+
+// Handler holds the logic for performing the redirects and satisfies the http interface.
+type Handler struct {
+	mu sync.Mutex
+
 	host         string
 	cacheControl string
 	paths        pathConfigSet
@@ -42,29 +65,64 @@ type pathConfig struct {
 }
 
 // NewHandler creates a new handler
-func NewHandler(config []byte) (*handler, error) {
-	var parsed struct {
-		Host     string `yaml:"host,omitempty"`
-		CacheAge *int64 `yaml:"cache_max_age,omitempty"`
-		Paths    map[string]struct {
-			Repo    string `yaml:"repo,omitempty"`
-			Display string `yaml:"display,omitempty"`
-			VCS     string `yaml:"vcs,omitempty"`
-		} `yaml:"paths,omitempty"`
-	}
-	if err := yaml.Unmarshal(config, &parsed); err != nil {
+func NewHandler(fetcher ConfigFetcher) (*Handler, error) {
+	fetchInterval := 86400
+
+	config, err := fetcher.Fetch()
+	if err != nil {
 		return nil, err
 	}
-	h := &handler{host: parsed.Host}
-	cacheAge := int64(86400) // 24 hours (in seconds)
-	if parsed.CacheAge != nil {
-		cacheAge = *parsed.CacheAge
-		if cacheAge < 0 {
-			return nil, errors.New("cache_max_age is negative")
+
+	if config.FetchInterval != nil && *config.FetchInterval > 0 {
+		fetchInterval = *config.FetchInterval
+	}
+
+	h := Handler{}
+
+	err = h.configure(config)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		var err error
+
+		for {
+			time.Sleep(time.Duration(fetchInterval) * time.Second)
+
+			config, err = fetcher.Fetch()
+			if err != nil {
+				log.Println(err)
+			} else {
+				if err := h.configure(config); err != nil {
+					log.Println(err)
+				}
+			}
+		}
+	}()
+
+	return &h, nil
+}
+
+func (h *Handler) configure(c *Config) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	cacheAge := 86400
+	if c.CacheAge != nil {
+		if *c.CacheAge < 0 {
+			return errors.New("cache_max_age is negative")
+		}
+		if *c.CacheAge >= 0 {
+			cacheAge = *c.CacheAge
 		}
 	}
+
+	h.host = c.Host
 	h.cacheControl = fmt.Sprintf("public, max-age=%d", cacheAge)
-	for path, e := range parsed.Paths {
+	h.paths = make(pathConfigSet, 0)
+
+	for path, e := range c.Paths {
 		pc := pathConfig{
 			path:    strings.TrimSuffix(path, "/"),
 			repo:    e.Repo,
@@ -83,20 +141,22 @@ func NewHandler(config []byte) (*handler, error) {
 		case e.VCS != "":
 			// Already filled in.
 			if e.VCS != "bzr" && e.VCS != "git" && e.VCS != "hg" && e.VCS != "svn" {
-				return nil, fmt.Errorf("configuration for %v: unknown VCS %s", path, e.VCS)
+				return fmt.Errorf("configuration for %v: unknown VCS %s", path, e.VCS)
 			}
 		case strings.HasPrefix(e.Repo, "https://github.com/"):
 			pc.vcs = "git"
 		default:
-			return nil, fmt.Errorf("configuration for %v: cannot infer VCS from %s", path, e.Repo)
+			return fmt.Errorf("configuration for %v: cannot infer VCS from %s", path, e.Repo)
 		}
 		h.paths = append(h.paths, pc)
 	}
+
 	sort.Sort(h.paths)
-	return h, nil
+
+	return nil
 }
 
-func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	current := r.URL.Path
 	pc, subpath := h.paths.find(current)
 	if pc == nil && current == "/" {
@@ -116,7 +176,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Display string
 		VCS     string
 	}{
-		Import:  h.Host(r) + pc.path,
+		Import:  h.getHost(r) + pc.path,
 		Subpath: subpath,
 		Repo:    pc.repo,
 		Display: pc.display,
@@ -126,8 +186,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	host := h.Host(r)
+func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
+	host := h.getHost(r)
 	handlers := make([]string, len(h.paths))
 	for i, h := range h.paths {
 		handlers[i] = host + h.path
@@ -143,10 +203,10 @@ func (h *handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) Host(r *http.Request) string {
+func (h *Handler) getHost(r *http.Request) string {
 	host := h.host
 	if host == "" {
-		host = defaultHost(r)
+		host = r.Host
 	}
 	return host
 }
@@ -225,8 +285,4 @@ func (pset pathConfigSet) find(path string) (pc *pathConfig, subpath string) {
 		}
 	}
 	return bestMatchConfig, subpath
-}
-
-func defaultHost(r *http.Request) string {
-	return r.Host
 }
