@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/chiefy/go-vanityurls-apex/handler"
+	"go.bourbon.stream/go-vanityurls-apex/handler"
 )
 
 func main() {
