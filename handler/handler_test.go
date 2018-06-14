@@ -22,12 +22,26 @@ import (
 	"net/http/httptest"
 	"sort"
 	"testing"
+
+	yaml "gopkg.in/yaml.v2"
 )
+
+type testConfigFetcher []byte
+
+func (tf testConfigFetcher) Fetch() (*Config, error) {
+	var config *Config
+
+	if err := yaml.Unmarshal(tf, &config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
 
 func TestHandler(t *testing.T) {
 	tests := []struct {
 		name   string
-		config string
+		config testConfigFetcher
 		path   string
 
 		goImport string
@@ -35,72 +49,72 @@ func TestHandler(t *testing.T) {
 	}{
 		{
 			name: "explicit display",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /portmidi:\n" +
 				"    repo: https://github.com/rakyll/portmidi\n" +
-				"    display: https://github.com/rakyll/portmidi _ _\n",
+				"    display: https://github.com/rakyll/portmidi _ _\n"),
 			path:     "/portmidi",
 			goImport: "example.com/portmidi git https://github.com/rakyll/portmidi",
 			goSource: "example.com/portmidi https://github.com/rakyll/portmidi _ _",
 		},
 		{
 			name: "display GitHub inference",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /portmidi:\n" +
-				"    repo: https://github.com/rakyll/portmidi\n",
+				"    repo: https://github.com/rakyll/portmidi\n"),
 			path:     "/portmidi",
 			goImport: "example.com/portmidi git https://github.com/rakyll/portmidi",
 			goSource: "example.com/portmidi https://github.com/rakyll/portmidi https://github.com/rakyll/portmidi/tree/master{/dir} https://github.com/rakyll/portmidi/blob/master{/dir}/{file}#L{line}",
 		},
 		{
 			name: "Bitbucket Mercurial",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /gopdf:\n" +
 				"    repo: https://bitbucket.org/zombiezen/gopdf\n" +
-				"    vcs: hg\n",
+				"    vcs: hg\n"),
 			path:     "/gopdf",
 			goImport: "example.com/gopdf hg https://bitbucket.org/zombiezen/gopdf",
 			goSource: "example.com/gopdf https://bitbucket.org/zombiezen/gopdf https://bitbucket.org/zombiezen/gopdf/src/default{/dir} https://bitbucket.org/zombiezen/gopdf/src/default{/dir}/{file}#{file}-{line}",
 		},
 		{
 			name: "Bitbucket Git",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /mygit:\n" +
 				"    repo: https://bitbucket.org/zombiezen/mygit\n" +
-				"    vcs: git\n",
+				"    vcs: git\n"),
 			path:     "/mygit",
 			goImport: "example.com/mygit git https://bitbucket.org/zombiezen/mygit",
 			goSource: "example.com/mygit https://bitbucket.org/zombiezen/mygit https://bitbucket.org/zombiezen/mygit/src/default{/dir} https://bitbucket.org/zombiezen/mygit/src/default{/dir}/{file}#{file}-{line}",
 		},
 		{
 			name: "subpath",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /portmidi:\n" +
 				"    repo: https://github.com/rakyll/portmidi\n" +
-				"    display: https://github.com/rakyll/portmidi _ _\n",
+				"    display: https://github.com/rakyll/portmidi _ _\n"),
 			path:     "/portmidi/foo",
 			goImport: "example.com/portmidi git https://github.com/rakyll/portmidi",
 			goSource: "example.com/portmidi https://github.com/rakyll/portmidi _ _",
 		},
 		{
 			name: "subpath with trailing config slash",
-			config: "host: example.com\n" +
+			config: testConfigFetcher("host: example.com\n" +
 				"paths:\n" +
 				"  /portmidi/:\n" +
 				"    repo: https://github.com/rakyll/portmidi\n" +
-				"    display: https://github.com/rakyll/portmidi _ _\n",
+				"    display: https://github.com/rakyll/portmidi _ _\n"),
 			path:     "/portmidi/foo",
 			goImport: "example.com/portmidi git https://github.com/rakyll/portmidi",
 			goSource: "example.com/portmidi https://github.com/rakyll/portmidi _ _",
 		},
 	}
 	for _, test := range tests {
-		h, err := NewHandler([]byte(test.config))
+		h, err := NewHandler(test.config)
 		if err != nil {
 			t.Errorf("%s: newHandler: %v", test.name, err)
 			continue
@@ -132,21 +146,21 @@ func TestHandler(t *testing.T) {
 }
 
 func TestBadConfigs(t *testing.T) {
-	badConfigs := []string{
-		"paths:\n" +
+	badConfigs := []testConfigFetcher{
+		testConfigFetcher("paths:\n" +
 			"  /missingvcs:\n" +
-			"    repo: https://bitbucket.org/zombiezen/gopdf\n",
-		"paths:\n" +
+			"    repo: https://bitbucket.org/zombiezen/gopdf\n"),
+		testConfigFetcher("paths:\n" +
 			"  /unknownvcs:\n" +
 			"    repo: https://bitbucket.org/zombiezen/gopdf\n" +
-			"    vcs: xyzzy\n",
-		"cache_max_age: -1\n" +
+			"    vcs: xyzzy\n"),
+		testConfigFetcher("cache_max_age: -1\n" +
 			"paths:\n" +
 			"  /portmidi:\n" +
-			"    repo: https://github.com/rakyll/portmidi\n",
+			"    repo: https://github.com/rakyll/portmidi\n"),
 	}
 	for _, config := range badConfigs {
-		_, err := NewHandler([]byte(config))
+		_, err := NewHandler(config)
 		if err == nil {
 			t.Errorf("expected config to produce an error, but did not:\n%s", config)
 		}
@@ -276,7 +290,7 @@ func TestPathConfigSetFind(t *testing.T) {
 func TestCacheHeader(t *testing.T) {
 	tests := []struct {
 		name         string
-		config       string
+		config       testConfigFetcher
 		cacheControl string
 	}{
 		{
@@ -285,18 +299,23 @@ func TestCacheHeader(t *testing.T) {
 		},
 		{
 			name:         "specify time",
-			config:       "cache_max_age: 60\n",
+			config:       testConfigFetcher("cache_max_age: 60\n"),
 			cacheControl: "public, max-age=60",
 		},
 		{
 			name:         "zero",
-			config:       "cache_max_age: 0\n",
+			config:       testConfigFetcher("cache_max_age: 0\n"),
 			cacheControl: "public, max-age=0",
 		},
 	}
 	for _, test := range tests {
-		h, err := NewHandler([]byte("paths:\n  /portmidi:\n    repo: https://github.com/rakyll/portmidi\n" +
-			test.config))
+		h, err := NewHandler(
+			append(
+				testConfigFetcher("paths:\n  /portmidi:\n    repo: https://github.com/rakyll/portmidi\n"),
+				test.config...,
+			),
+		)
+
 		if err != nil {
 			t.Errorf("%s: newHandler: %v", test.name, err)
 			continue
